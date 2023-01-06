@@ -1,5 +1,5 @@
 BINDING_HEADER_LFT = "Looking For Turtles"
-BINDING_NAME_LFT = "Togle Turtle Finder"
+BINDING_NAME_LFT = "Toggle Turtle Finder"
 
 local _G, _ = _G or getfenv()
 
@@ -461,7 +461,7 @@ LFTFillAvailableDungeonsDelay:SetScript("OnHide", function()
         LFT.fillAvailableDungeons(LFTFillAvailableDungeonsDelay.queueAfterIfPossible)
         LFTFillAvailableDungeonsDelay.triggers = LFTFillAvailableDungeonsDelay.triggers + 1
     else
-        lferror('Error occurred at LFTFillAvailableDungeonsDelay triggers = 10. Please report this to Xerron/Er.')
+        --lferror('Error occurred at LFTFillAvailableDungeonsDelay triggers = 10. Please report this to Xerron/Er.')
     end
 end)
 LFTFillAvailableDungeonsDelay:SetScript("OnUpdate", function()
@@ -1592,7 +1592,12 @@ local hookChatFrame = function(frame)
     local original = frame.AddMessage
 
     if original then
+        local skiphook = nil
         frame.AddMessage = function(t, message, ...)
+            if skiphook then
+                return original(t, message, unpack(arg))
+            end
+
             LFT.hookExecutions = LFT.hookExecutions + 1
 
             if string.find(message, 'Players online:', 1, true) and
@@ -1620,8 +1625,7 @@ local hookChatFrame = function(frame)
             if not LFT.gotTimeFromServer then
                 if LFT.gotOnline and LFT.gotUptime then
                     LFT.gotTimeFromServer = true
-                    frame.AddMessage = original
-                    original = nil
+                    skiphook = true
                 end
             end
 
@@ -4743,7 +4747,7 @@ LFT.allDungeons = {
     ['Karazhan Crypt'] = { minLevel = 58, maxLevel = 60, code = 'kc', queued = false, canQueue = true, background = 'kc', myRole = '' },
     ['Caverns of Time: Black Morass'] = { minLevel = 60, maxLevel = 60, code = 'cotbm', queued = false, canQueue = true, background = 'cotbm', myRole = '' },
     ['Stormwind Vault'] = { minLevel = 60, maxLevel = 60, code = 'swv', queued = false, canQueue = true, background = 'swv', myRole = '' },
-    ['Hateforge Quarry'] = { minLevel = 52, maxLevel = 60, code = 'hfq', queued = false, canQueue = true, background = 'hfq', myRole = '' },
+    ['Hateforge Quarry'] = { minLevel = 50, maxLevel = 60, code = 'hfq', queued = false, canQueue = true, background = 'hfq', myRole = '' },
 
     --['GM Test'] = { minLevel = 1, maxLevel = 60, code = 'gmtest', queued = false, canQueue = true, background = 'stratholme', myRole = '' },
 }
@@ -5027,7 +5031,7 @@ LFT.bosses = {
 	['hfq'] = {
         'High Foreman Bargul Blackhammer',
         'Engineer Figgles',
-        'Corossis',
+        'Corrosis',
         'Hatereaver Annihilator',
         'Har\'gesh Doomcaller'
     },
