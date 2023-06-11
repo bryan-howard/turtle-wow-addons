@@ -436,12 +436,17 @@ function FindBuff( obuff, unit, item)
 	local textleft1=getglobal(tooltip:GetName().."TextLeft1");
 	if ( not unit ) then
 		unit ='player';
+	elseif ( unit == "mouseover" ) then
+		local frame = GetMouseFocus()
+		if ( frame.label and frame.id ) then
+			unit = frame.label .. frame.id
+		end
 	end
 	local my, me, mc, oy, oe, oc = GetWeaponEnchantInfo();
 	if ( my ) then
 		tooltip:SetOwner(UIParent, "ANCHOR_NONE");
 		tooltip:SetInventoryItem( unit, 16);
-		for i=1, 23 do
+		for i=1, 32 do
 			local text = getglobal("SM_TooltipTextLeft"..i):GetText();
 			if ( not text ) then
 				break;
@@ -454,7 +459,7 @@ function FindBuff( obuff, unit, item)
 	elseif ( oy ) then
 		tooltip:SetOwner(UIParent, "ANCHOR_NONE");
 		tooltip:SetInventoryItem( unit, 17);
-		for i=1, 23 do
+		for i=1, 32 do
 			local text = getglobal("SM_TooltipTextLeft"..i):GetText();
 			if ( not text ) then
 				break;
@@ -502,10 +507,21 @@ function FindBuff( obuff, unit, item)
 	tooltip:Hide();
 end
 
+function SpellReady(spell)
+    local i,a=0
+    while a~=spell do 
+        i=i+1 
+        a=GetSpellName(i,"spell")
+    end 
+    if GetSpellCooldown(i,"spell") == 0 then 
+        return true
+    end
+end
+
 function CancelBuff(...)
 	for j=1, getn(arg) do
    	local buff = strlower(arg[j]);
-   	for i=0, 24 do
+   	for i=0, 32 do
    		SM_Tooltip:SetOwner(UIParent, "ANCHOR_NONE");
    		SM_Tooltip:SetPlayerBuff(i);
    		local name = SM_TooltipTextLeft1:GetText();

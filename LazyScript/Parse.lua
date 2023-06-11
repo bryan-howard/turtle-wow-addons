@@ -95,7 +95,7 @@ function lazyScript.ParseLine(line)
 
 		-- Did not find a bitParser, is it an action?
 		if (not foundBit) then
-			relaxedBit = lazyScript.relax(bit)
+			local relaxedBit = lazyScript.relax(bit)
 			for key, action in pairs(lazyScript.actions) do
 				if (lazyScript.relax(key) == relaxedBit) then
 					table.insert(actions, action)
@@ -127,6 +127,7 @@ function lazyScript.ParseLine(line)
 			local lastActionObj = actions[table.getn(actions)]
 			local spellIndex, _, _ = lastActionObj:FindSpellRanks(false)
 			local spellName, _ = GetSpellName(spellIndex, BOOKTYPE_SPELL)
+			if target == "" and UnitExists("target") then target = "target" end
 			rank = LazySpell:GetSmartSpell(spellName, target)
 		end
 		if rank then
