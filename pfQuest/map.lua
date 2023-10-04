@@ -24,6 +24,17 @@ compatnamefake:SetScript("OnEvent", function()
   end
 end)
 
+-- checking for control key is very time expensive in 1.12
+-- this loop puts it into one place and only updates it every .2 seconds
+-- it also only updates the key if the mouse is over a relevant frame
+local controlkey = CreateFrame("Frame", "pfQuestControlKey", UIParent)
+controlkey:SetScript("OnUpdate", function()
+  if ( this.throttle or .2) > GetTime() then return else this.throttle = GetTime() + .2 end
+  if WorldMapFrame:IsShown() and MouseIsOver(WorldMapFrame) or MouseIsOver(pfMap.drawlayer) then
+    controlkey.pressed = IsControlKeyDown()
+  end
+end)
+
 local validmaps = setmetatable({},{__mode="kv"})
 local rgbcache = setmetatable({},{__mode="kv"})
 local minimap_sizes = pfDB["minimap"]
@@ -47,6 +58,11 @@ local minimap_zoom = {
 
 local unifiedcache = {}
 
+-- used to store/cache combined meta data across nodes of
+-- the same kind to avoid duplicating data for each pin
+-- the objects here get directly attached to the pfMap nodes
+local similar_nodes = {}
+
 local function IsEmpty(tabl)
   for k,v in pairs(tabl) do
     return false
@@ -55,15 +71,21 @@ local function IsEmpty(tabl)
 end
 
 local layers = {
-  [pfQuestConfig.path.."\\img\\available"]    = 1,
-  [pfQuestConfig.path.."\\img\\available_c"]  = 2,
-  [pfQuestConfig.path.."\\img\\complete"]     = 3,
-  [pfQuestConfig.path.."\\img\\complete_c"]   = 4,
-  [pfQuestConfig.path.."\\img\\icon_vendor"]  = 5,
-  [pfQuestConfig.path.."\\img\\fav"]          = 6,
-  [pfQuestConfig.path.."\\img\\cluster_item"] = 9,
-  [pfQuestConfig.path.."\\img\\cluster_mob"]  = 9,
-  [pfQuestConfig.path.."\\img\\cluster_misc"] = 9,
+  -- regular icons
+  [pfQuestConfig.path.."\\img\\available"]          = 1,
+  [pfQuestConfig.path.."\\img\\available_c"]        = 2,
+  [pfQuestConfig.path.."\\img\\complete"]           = 3,
+  [pfQuestConfig.path.."\\img\\complete_c"]         = 4,
+  [pfQuestConfig.path.."\\img\\icon_vendor"]        = 5,
+  [pfQuestConfig.path.."\\img\\fav"]                = 6,
+
+  -- cluster textures
+  [pfQuestConfig.path.."\\img\\cluster_item"]       = 9,
+  [pfQuestConfig.path.."\\img\\cluster_mob"]        = 9,
+  [pfQuestConfig.path.."\\img\\cluster_misc"]       = 9,
+  [pfQuestConfig.path.."\\img\\cluster_mob_mono"]   = 9,
+  [pfQuestConfig.path.."\\img\\cluster_item_mono"]  = 9,
+  [pfQuestConfig.path.."\\img\\cluster_misc_mono"]  = 9,
 }
 
 local function GetLayerByTexture(tex)
@@ -111,13 +133,14 @@ local function str2rgb(text)
   return unpack(rgbcache[text])
 end
 
-local fpsmod
+local fpsmod, step
 local function NodeAnimate(self, zoom, alpha, fps)
   local cur_zoom = self:GetWidth()
   local cur_alpha = self:GetAlpha()
   local change = nil
   self:EnableMouse(true)
   fpsmod = math.min(2/fps, 2)
+  step = fpsmod/10
 
   -- update size
   if math.abs(cur_zoom - zoom) < 3 then
@@ -134,7 +157,7 @@ local function NodeAnimate(self, zoom, alpha, fps)
   end
 
   -- update alpha
-  if math.abs(cur_alpha - alpha) < .3 then
+  if math.abs(cur_alpha - alpha) < step then
     self:SetAlpha(alpha)
 
     -- disable mouse on hidden
@@ -142,10 +165,10 @@ local function NodeAnimate(self, zoom, alpha, fps)
       self:EnableMouse(nil)
     end
   elseif cur_alpha < alpha then
-    self:SetAlpha(cur_alpha + fpsmod/10)
+    self:SetAlpha(cur_alpha + step)
     change = true
   elseif cur_alpha > alpha then
-    self:SetAlpha(cur_alpha - fpsmod/10)
+    self:SetAlpha(cur_alpha - step)
     change = true
   end
 
@@ -198,7 +221,16 @@ pfMap.tooltip:SetScript("OnShow", function()
   end
 end)
 
+-- dummy function that can be used by extensions
+-- to avoid drawing the minimap at some locations
+function pfMap:HasMinimap()
+  return true
+end
+
 function pfMap.tooltip:GetColor(min, max)
+  local max = max or 1
+  local min = min or max or 1
+
   local perc = min / max
   local r1, g1, b1, r2, g2, b2
   if perc <= 0.5 then
@@ -252,7 +284,7 @@ function pfMap:ShowTooltip(meta, tooltip)
             if type == "monster" then
               -- kill
               local i, j, monsterName, objNum, objNeeded = strfind(text, pfUI.api.SanitizePattern(QUEST_MONSTERS_KILLED))
-              if meta["spawn"] == monsterName then
+              if monsterName and meta["spawn"] == monsterName then
                 catch_obj = true
                 local r,g,b = pfMap.tooltip:GetColor(objNum, objNeeded)
                 tooltip:AddLine("|cffaaaaaa- |r" .. monsterName .. ": " .. objNum .. "/" .. objNeeded, r, g, b)
@@ -389,9 +421,10 @@ function pfMap:SetMapByID(id)
   end
 end
 
-customids = {
+local customids = {
   ["AlteracValley"] = 2597,
 }
+
 function pfMap:GetMapID(cid, mid)
   cid = cid or GetCurrentMapContinent()
   mid = mid or GetCurrentMapZone()
@@ -419,6 +452,9 @@ function pfMap:AddNode(meta)
   local spawn = meta["spawn"]
   local item = meta["item"]
 
+  local sindex = string.format("%s:%s:%s:%s:%s:%s",
+    (addon or ""), (map or ""), (coords or ""), (title or ""), (layer or ""), (spawn or ""), (item or ""))
+
   -- use prioritized clusters
   if layer >= 9 and meta["priority"] then
     layer = layer + (10 - min(meta["priority"], 10))
@@ -428,64 +464,66 @@ function pfMap:AddNode(meta)
   if not pfMap.nodes[addon][map] then pfMap.nodes[addon][map] = {} end
   if not pfMap.nodes[addon][map][coords] then pfMap.nodes[addon][map][coords] = {} end
 
-  if item and pfMap.nodes[addon][map][coords][title] and table.getn(pfMap.nodes[addon][map][coords][title].item) > 0 then
-    -- check if item exists
-    for id, name in pairs(pfMap.nodes[addon][map][coords][title].item) do
-      if name == item then
-        return
+  -- skip early on existing nodes
+  if pfMap.nodes[addon][map][coords][title] then
+    if item and table.getn(pfMap.nodes[addon][map][coords][title].item) > 0 then
+      -- check if item already exists
+      for id, name in pairs(pfMap.nodes[addon][map][coords][title].item) do
+        if name == item then return end
       end
+
+      -- add new item and exit
+      table.insert(pfMap.nodes[addon][map][coords][title].item, item)
+      return
     end
-    table.insert(pfMap.nodes[addon][map][coords][title].item, item)
+
+    if pfMap.nodes[addon][map][coords][title] and pfMap.nodes[addon][map][coords][title].layer and layer and
+     pfMap.nodes[addon][map][coords][title].layer >= layer then
+      -- identical node already exists, exit here
+      return
+    end
   end
 
-  if pfMap.nodes[addon][map][coords][title] and pfMap.nodes[addon][map][coords][title].layer and layer and
-   pfMap.nodes[addon][map][coords][title].layer >= layer then
-    -- identical node already exists, exit here
-    return
+  -- create new combined data node from given meta data
+  if not similar_nodes[sindex] then
+    similar_nodes[sindex] = {}
+    for key, val in pairs(meta) do similar_nodes[sindex][key] = val end
+    similar_nodes[sindex].item = { [1] = item }
   end
 
-  -- create new node from meta data
-  local node = {}
-  for key, val in pairs(meta) do
-    node[key] = val
-  end
-  node.item = { [1] = item }
+  -- set current node to combined node
+  pfMap.nodes[addon][map][coords][title] = similar_nodes[sindex]
 
   -- add node to unified cluster cache
   if not meta["cluster"] and not meta["texture"] then
-    local node_index
+    local node_index = meta.item or meta.spawn or UNKNOWN
     local x, y = tonumber(meta.x), tonumber(meta.y)
-    local node_meta = {}
 
-    if meta.item then
-      node_index = meta.item
-    elseif meta.spawn then
-      node_index = meta.spawn
-    else
-      node_index = UNKNOWN
-    end
-
-    -- clone node
-    for key, val in pairs(meta) do
-      node_meta[key] = val
-    end
-
+    -- create prerequisite table structure
     unifiedcache[title] = unifiedcache[title] or {}
     unifiedcache[title][map] = unifiedcache[title][map] or {}
-    unifiedcache[title][map][node_index] = unifiedcache[title][map][node_index] or { meta = node_meta, coords = {} }
+
+    if not unifiedcache[title][map][node_index] then
+      -- create new unified node from given meta data
+      local unified_meta = {}
+      for key, val in pairs(meta) do unified_meta[key] = val end
+
+      -- save node to unified cache
+      unifiedcache[title][map][node_index] = { meta = unified_meta, coords = {} }
+    end
+
+    -- append new coords to unified cache unified cache
     table.insert(unifiedcache[title][map][node_index].coords, { x, y })
   end
-
-  pfMap.nodes[addon][map][coords][title] = node
 
   -- add to gametooltips
   if spawn and title then
     pfMap.tooltips[spawn] = pfMap.tooltips[spawn] or {}
     pfMap.tooltips[spawn][title] = pfMap.tooltips[spawn][title] or {}
-    pfMap.tooltips[spawn][title][map] = pfMap.tooltips[spawn][title][map] or node
+    pfMap.tooltips[spawn][title][map] = pfMap.tooltips[spawn][title][map] or similar_nodes[sindex]
   end
 
-  pfMap.queue_update = true
+  pfMap.queue_update = GetTime()
 end
 
 function pfMap:DeleteNode(addon, title)
@@ -520,7 +558,7 @@ function pfMap:DeleteNode(addon, title)
     end
   end
 
-  pfMap.queue_update = true
+  pfMap.queue_update = GetTime()
 end
 
 function pfMap:NodeClick()
@@ -530,8 +568,11 @@ function pfMap:NodeClick()
       pfQuest_history[this.questid] = { time(), UnitLevel("player") }
     end
 
-    pfMap:DeleteNode(this.node[this.title].addon, this.title)
-    pfMap:UpdateNodes()
+    if this.node and this.title and this.node[this.title] then
+      -- delete node from map
+      pfMap:DeleteNode(this.node[this.title].addon, this.title)
+    end
+
     pfQuest.updateQuestGivers = true
   elseif this.texture and pfQuest.route and
    (( pfQuest_config["routecluster"] == "1" and this.layer >= 9 ) or
@@ -541,11 +582,11 @@ function pfMap:NodeClick()
   then
     -- set as arrow target priority
     pfQuest.route.SetTarget((not pfQuest.route.IsTarget(this) and this))
-    pfMap:UpdateNodes()
+    pfMap.queue_update = GetTime()
   else
     -- switch color
     pfQuest_colors[this.color] = { str2rgb(this.color .. GetTime()) }
-    pfMap:UpdateNodes()
+    pfMap.queue_update = GetTime()
   end
 end
 
@@ -691,19 +732,25 @@ function pfMap:UpdateNode(frame, node, color, obj)
   end
 
   if ( frame.updateColor or frame.updateTexture or not frame.tex:GetTexture() ) and not frame.texture then
+    local r,g,b = str2rgb(frame.color)
+
     if obj == "minimap" and pfQuest_config["cutoutminimap"] == "1" then
       frame.tex:SetTexture(pfQuestConfig.path.."\\img\\nodecut")
+      frame.tex:SetVertexColor(r,g,b,1)
     elseif obj ~= "minimap" and pfQuest_config["cutoutworldmap"] == "1" then
       frame.tex:SetTexture(pfQuestConfig.path.."\\img\\nodecut")
+      frame.tex:SetVertexColor(r,g,b,1)
+    elseif frame.title and pfQuest.icons[frame.title] then
+      frame.tex:SetTexture(pfQuest.icons[frame.title])
+      frame.tex:SetVertexColor(1,1,1,1)
     else
       frame.tex:SetTexture(pfQuestConfig.path.."\\img\\node")
+      frame.tex:SetVertexColor(r,g,b,1)
     end
-    local r,g,b = str2rgb(frame.color)
-    frame.tex:SetVertexColor(r,g,b,1)
   end
 
   if frame.updateLayer then
-    frame:SetFrameLevel((obj == "minimap" and 1 or 112) + frame.layer)
+    frame:SetFrameLevel((obj == "minimap" and 4 or 112) + frame.layer)
   end
 
   if frame.updateTexture or frame.updateVertex or frame.updateColor or frame.updateLayer then
@@ -713,7 +760,7 @@ function pfMap:UpdateNode(frame, node, color, obj)
   local highlight = frame.texture and pfMap.highlightdb[frame][pfMap.highlight] and true or nil
   local target = frame.texture and pfQuest.route and pfQuest.route.IsTarget(frame) or nil
 
-  -- set default size for node
+  -- set default sizes for different node types
   frame.defsize = (frame.cluster or frame.layer == 4) and 22 or 16
 
   -- make the current route target visible
@@ -729,6 +776,8 @@ function pfMap:UpdateNode(frame, node, color, obj)
 end
 
 function pfMap:UpdateNodes()
+  pfQuest:Debug("Update Nodes")
+
   local color = pfQuest_config["spawncolors"] == "1" and "spawn" or "title"
   local map = pfMap:GetMapID(GetCurrentMapContinent(), GetCurrentMapZone())
   local i = 1
@@ -762,7 +811,10 @@ function pfMap:UpdateNodes()
         end
 
         -- hide cluster nodes if set
-        if pfMap.pins[i].cluster and pfQuest_config.showcluster == "0" then
+        if pfQuest_config["showcluster"] == "0" and pfMap.pins[i].cluster then
+          pfMap.pins[i]:Hide()
+        -- hide individual quest spawns
+        elseif pfQuest_config["showspawn"] == "0" and addon == "PFQUEST" and not pfMap.pins[i].texture then
           pfMap.pins[i]:Hide()
         else
           -- populate quest list on map
@@ -798,7 +850,7 @@ function pfMap:UpdateMinimap()
   end
 
   -- hide all minimap nodes while shift is pressed
-  if IsControlKeyDown() and MouseIsOver(pfMap.drawlayer) then
+  if controlkey.pressed and MouseIsOver(pfMap.drawlayer) then
     this.xPlayer = nil
 
     for id, pin in pairs(pfMap.mpins) do
@@ -840,7 +892,8 @@ function pfMap:UpdateMinimap()
 
   -- refresh all nodes
   for addon, data in pairs(pfMap.nodes) do
-    if data[mapID] and minimap_sizes[mapID] then
+    -- hide minimap nodes in continent view
+    if data[mapID] and minimap_sizes[mapID] and pfMap:HasMinimap(mapID) then
       for coords, node in pairs(data[mapID]) do
         local x, y
         if coord_cache[coords] then
@@ -881,7 +934,9 @@ function pfMap:UpdateMinimap()
 
           pfMap.mpins[i].hl:Hide()
 
-          if pfMap.mpins[i].cluster then
+          if pfQuest_config["showclustermini"] == "0" and pfMap.mpins[i].cluster then
+            pfMap.mpins[i]:Hide()
+          elseif pfQuest_config["showspawnmini"] == "0" and addon == "PFQUEST" and not pfMap.mpins[i].texture then
             pfMap.mpins[i]:Hide()
           else
             pfMap.mpins[i]:ClearAllPoints()
@@ -943,7 +998,7 @@ pfMap:SetScript("OnUpdate", function()
       elseif not highlight and pfMap.highlight then
         -- fade node
         transition = frame:Animate(frame.defsize, tonumber(pfQuest_config["nodefade"]), fps) or transition
-      elseif frame.texture then
+      elseif frame.texture or frame.cluster then
         -- defaults for textured nodes
         transition = frame:Animate(frame.defsize, 1, fps) or transition
       else
@@ -957,7 +1012,8 @@ pfMap:SetScript("OnUpdate", function()
   if ( this.throttle or .2) > GetTime() then return else this.throttle = GetTime() + .05 end
 
   -- process node updates if required
-  if pfMap.queue_update then
+  if pfMap.queue_update and pfMap.queue_update + .25 < GetTime() then
+    pfMap.queue_update = nil
     pfMap:UpdateNodes()
   end
 
@@ -973,11 +1029,9 @@ pfMap:SetScript("OnUpdate", function()
   pfMap:UpdateMinimap()
 
   -- update hidecluster detection
-  if IsControlKeyDown() then
+  if controlkey.pressed then
     hidecluster = MouseIsOver(WorldMapFrame)
   else
     hidecluster = nil
   end
-
-  pfMap.queue_update = nil
 end)

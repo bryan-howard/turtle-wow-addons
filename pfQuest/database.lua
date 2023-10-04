@@ -5,7 +5,7 @@ pfDatabase = {}
 
 local loc = GetLocale()
 local dbs = { "items", "quests", "quests-itemreq", "objects", "units", "zones", "professions", "areatrigger", "refloot" }
-local noloc = { "items", "quests", "objects", "units" }
+local noloc = { items = true, quests = true, objects = true, units = true }
 
 pfDB.locales = {
   ["enUS"] = "English",
@@ -13,6 +13,7 @@ pfDB.locales = {
   ["frFR"] = "French",
   ["deDE"] = "German",
   ["zhCN"] = "Chinese",
+  ["zhTW"] = "Taiwanese",
   ["esES"] = "Spanish",
   ["ruRU"] = "Russian",
 }
@@ -20,9 +21,7 @@ pfDB.locales = {
 -- Patch databases to further expansions
 local function patchtable(base, diff)
   for k, v in pairs(diff) do
-    if base[k] and type(v) == "table" then
-      patchtable(base[k], v)
-    elseif type(v) == "string" and v == "_" then
+    if type(v) == "string" and v == "_" then
       base[k] = nil
     else
       base[k] = v
@@ -237,39 +236,51 @@ end)
 
 -- check for unlocalized servers and fallback to enUS databases when the server
 -- returns item names that are different to the database ones. (check via. Hearthstone)
-CreateFrame("Frame"):SetScript("OnUpdate", function()
+CreateFrame("Frame", "pfQuestLocaleCheck", UIParent):SetScript("OnUpdate", function()
   -- throttle to to one item per second
-  if ( this.tick or 0) > GetTime() then return else this.tick = GetTime() + 1 end
+  if ( this.tick or 0) > GetTime() then return else this.tick = GetTime() + .1 end
 
-  -- give the server one iteration to return the itemname.
-  -- this is required for clients that use a clean wdb folder.
-  if not this.sentquery then
+  if not this.dryrun then
+    -- give the server one iteration to return the itemname.
+    -- this is required for clients that use a clean wdb folder.
     ItemRefTooltip:SetOwner(UIParent, "ANCHOR_PRESERVE")
     ItemRefTooltip:SetHyperlink("item:6948:0:0:0")
     ItemRefTooltip:Hide()
-    this.sentquery = true
+    this.dryrun = true
     return
   end
 
+  -- try to load hearthstone into tooltip
   ItemRefTooltip:SetOwner(UIParent, "ANCHOR_PRESERVE")
   ItemRefTooltip:SetHyperlink("item:6948:0:0:0")
-  if ItemRefTooltipTextLeft1 and ItemRefTooltipTextLeft1:IsVisible() then
+
+  -- check tooltip for results
+  if ItemRefTooltip:IsShown() and ItemRefTooltipTextLeft1 and ItemRefTooltipTextLeft1:IsVisible() then
+    -- once the tooltip shows up, read the name and hide it
     local name = ItemRefTooltipTextLeft1:GetText()
     ItemRefTooltip:Hide()
 
     -- check for noloc
-    if name and name ~= "" and pfDB["items"][loc][6948] then
+    if name and name ~= "" and pfDB["items"][loc] and pfDB["items"][loc][6948] then
       if not strfind(name, pfDB["items"][loc][6948], 1) then
-        for id, db in pairs(noloc) do
-          pfDB[db]["loc"] = pfDB[db]["enUS"] or {}
+        pfDatabase.dbstring = ""
+        for id, db in pairs(dbs) do
+          -- assign existing locale and update dbstring
+          pfDB[db]["loc"] = noloc[db] and pfDB[db]["enUS"] or pfDB[db][loc] or {}
+          pfDatabase.dbstring = pfDatabase.dbstring .. " |cffcccccc[|cffffffff" .. db .. "|cffcccccc:|cff33ffcc" .. ( noloc[db] and "enUS" or loc ) .. "|cffcccccc]"
         end
       end
+
+      pfDatabase.localized = true
       this:Hide()
     end
   end
 
   -- set a detection timeout to 15 seconds
-  if GetTime() > 15 then this:Hide() end
+  if GetTime() > 15 then
+    pfDatabase.localized = true
+    this:Hide()
+  end
 end)
 
 -- sanity check the databases
@@ -317,6 +328,9 @@ if pfQuestCompat.client > 11200 then
   bitraces[1024] = "Draenei"
 end
 
+-- make it public for extensions
+pfDB.bitraces = bitraces
+
 local bitclasses = {
   [1] = "WARRIOR",
   [2] = "PALADIN",
@@ -328,6 +342,9 @@ local bitclasses = {
   [256] = "WARLOCK",
   [1024] = "DRUID"
 }
+
+-- make it public for extensions
+pfDB.bitclasses = bitclasses
 
 function pfDatabase:BuildQuestDescription(meta)
   if not meta.title or not meta.quest or not meta.QTYPE then return end
@@ -442,14 +459,15 @@ function pfDatabase:ShowExtendedTooltip(id, tooltip, parent, anchor, offx, offy)
   tooltip:Show()
 end
 
--- PlayerHasSkill
--- Returns false if the player has the required skill
-function pfDatabase:PlayerHasSkill(skill)
+-- GetPlayerSkill
+-- Returns false if the player doesn't have the required skill, or their rank if they do
+function pfDatabase:GetPlayerSkill(skill)
   if not professions[skill] then return false end
 
   for i=0,GetNumSkillLines() do
-    if GetSkillLineInfo(i) == professions[skill] then
-      return true
+    local skillName, _, _, skillRank = GetSkillLineInfo(i)
+    if skillName == professions[skill] then
+      return skillRank
     end
   end
 
@@ -503,7 +521,7 @@ function pfDatabase:GetRaceMaskByID(id, db)
       -- get quest starter faction
       if (quests[id]["start"]["U"]) then
         for _, startUnitId in ipairs(quests[id]["start"]["U"]) do
-          if units[startUnitId]["fac"] and factionMap[units[startUnitId]["fac"]] then
+          if units[startUnitId] and units[startUnitId]["fac"] and factionMap[units[startUnitId]["fac"]] then
             questStartRaceMask = bit.bor(factionMap[units[startUnitId]["fac"]])
           end
         end
@@ -512,7 +530,7 @@ function pfDatabase:GetRaceMaskByID(id, db)
       -- get quest object starter faction
       if (quests[id]["start"]["O"]) then
         for _, startObjectId in ipairs(quests[id]["start"]["O"]) do
-          if objects[startObjectId]["fac"] and factionMap[objects[startObjectId]["fac"]] then
+          if objects[startObjectId] and objects[startObjectId]["fac"] and factionMap[objects[startObjectId]["fac"]] then
             questStartRaceMask = bit.bor(factionMap[objects[startObjectId]["fac"]])
           end
         end
@@ -776,11 +794,27 @@ function pfDatabase:SearchZone(obj, meta, partial)
   return maps
 end
 
+function pfDatabase:SearchObjectSkill(id)
+  if not id or not tonumber(id) then return end
+  local skill, caption = nil, nil
+
+  if (pfDB["meta"]["herbs"][-id]) then
+    skill = pfDB["meta"]["herbs"][-id]
+    caption = pfQuest_Loc["Herbalism"]
+  elseif (pfDB["meta"]["mines"][-id]) then
+    skill = pfDB["meta"]["mines"][-id]
+    caption = pfQuest_Loc["Mining"]
+  end
+
+  return skill, caption
+end
+
 -- Scans for all objects with a specified ID
 -- Adds map nodes for each and returns its map table
 function pfDatabase:SearchObjectID(id, meta, maps, prio)
   if not objects[id] or not objects[id]["coords"] then return maps end
 
+  local skill, caption = pfDatabase:SearchObjectSkill(id)
   local maps = maps or {}
   local prio = prio or 1
 
@@ -798,7 +832,7 @@ function pfDatabase:SearchObjectID(id, meta, maps, prio)
       meta["x"]     = x
       meta["y"]     = y
 
-      meta["level"] = nil
+      meta["level"] = skill and string.format("%s [%s]", skill, caption) or nil
       meta["spawntype"] = pfQuest_Loc["Object"]
       meta["respawn"] = respawn and SecondsToTime(respawn)
 
@@ -962,7 +996,9 @@ function pfDatabase:SearchQuestID(id, meta, maps)
   meta["qmin"] = quests[id]["min"]
 
   -- clear previous unified quest nodes
-  pfMap.unifiedcache[meta.quest] = {}
+  if meta.quest then
+    pfMap.unifiedcache[meta.quest] = {}
+  end
 
   if pfQuest_config["currentquestgivers"] == "1" then
     -- search quest-starter
@@ -1198,24 +1234,26 @@ function pfDatabase:SearchQuestID(id, meta, maps)
   local addon = meta["addon"] or "PFDB"
   if pfMap.nodes[addon] then
     for map in pairs(pfMap.nodes[addon]) do
-      if pfMap.unifiedcache[meta.quest] and pfMap.unifiedcache[meta.quest][map] then
+      if meta.quest and pfMap.unifiedcache[meta.quest] and pfMap.unifiedcache[meta.quest][map] then
         for hash, data in pairs(pfMap.unifiedcache[meta.quest][map]) do
           meta = data.meta
           meta["title"] = meta["quest"]
           meta["cluster"] = true
           meta["zone"]  = map
 
+          local icon = pfQuest_config["clustermono"] == "1" and "_mono" or ""
+
           if meta.item then
             meta["x"], meta["y"], meta["priority"] = getcluster(data.coords, meta["quest"]..hash..map)
-            meta["texture"] = pfQuestConfig.path.."\\img\\cluster_item"
+            meta["texture"] = pfQuestConfig.path.."\\img\\cluster_item" .. icon
             pfMap:AddNode(meta, true)
           elseif meta.spawntype and meta.spawntype == pfQuest_Loc["Unit"] and meta.spawn and not meta.itemreq then
             meta["x"], meta["y"], meta["priority"] = getcluster(data.coords, meta["quest"]..hash..map)
-            meta["texture"] = pfQuestConfig.path.."\\img\\cluster_mob"
+            meta["texture"] = pfQuestConfig.path.."\\img\\cluster_mob" .. icon
             pfMap:AddNode(meta, true)
           else
             meta["x"], meta["y"], meta["priority"] = getcluster(data.coords, meta["quest"]..hash..map)
-            meta["texture"] = pfQuestConfig.path.."\\img\\cluster_misc"
+            meta["texture"] = pfQuestConfig.path.."\\img\\cluster_misc" .. icon
             pfMap:AddNode(meta, true)
           end
         end
@@ -1252,10 +1290,16 @@ function pfDatabase:QuestFilter(id, plevel, pclass, prace)
 
   -- hide missing pre-quests
   if quests[id]["pre"] then
-    -- check all pre-quests to be completed
+    -- check all pre-quests for one to be completed
+    local one_complete = nil
     for _, prequest in pairs(quests[id]["pre"]) do
-      if not pfQuest_history[prequest] then return end
+      if pfQuest_history[prequest] then
+        one_complete = true
+      end
     end
+
+    -- hide if none of the pre-quests has been completed
+    if not one_complete then return end
   end
 
   -- hide non-available quests for your race
@@ -1265,7 +1309,7 @@ function pfDatabase:QuestFilter(id, plevel, pclass, prace)
   if quests[id]["class"] and not ( bit.band(quests[id]["class"], pclass) == pclass ) then return end
 
   -- hide non-available quests for your profession
-  if quests[id]["skill"] and not pfDatabase:PlayerHasSkill(quests[id]["skill"]) then return end
+  if quests[id]["skill"] and not pfDatabase:GetPlayerSkill(quests[id]["skill"]) then return end
 
   -- hide lowlevel quests
   if quests[id]["lvl"] and quests[id]["lvl"] < plevel - 4 and pfQuest_config["showlowlevel"] == "0" then return end
@@ -1370,7 +1414,7 @@ function pfDatabase:FormatQuestText(questText)
   questText = string.gsub(questText, "$[Bb]", "\n")
   -- UnitSex("player") returns 2 for male and 3 for female
   -- that's why there is an unused capture group around the $[Gg]
-  return string.gsub(questText, "($[Gg])(.+):(.+);", "%"..UnitSex("player"))
+  return string.gsub(questText, "($[Gg])([^:]+):([^;]+);", "%"..UnitSex("player"))
 end
 
 -- GetQuestIDs
@@ -1426,11 +1470,18 @@ function pfDatabase:GetQuestIDs(qid)
       end
     end
 
-    -- set title to new title
     if not ttitle then
-      pfQuest_questcache[identifier] = { title }
-      return
+      -- return early on unknown quests.
+      if not pfDatabase.localized then
+        -- skip cache if locale-checks are still running
+        return { title }
+      else
+        -- flag quest as unknown and return
+        pfQuest_questcache[identifier] = { title }
+        return pfQuest_questcache[identifier]
+      end
     else
+      -- set title to best result
       title = ttitle
     end
   end

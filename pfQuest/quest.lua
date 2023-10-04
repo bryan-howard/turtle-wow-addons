@@ -1,10 +1,19 @@
 -- multi api compat
-local _G = _G or getfenv(0)
 local compat = pfQuestCompat
 local _, _, _, client = GetBuildInfo()
 client = client or 11200
+local _G = client == 11200 and getfenv(0) or _G
 
 pfQuest = CreateFrame("Frame")
+pfQuest.icons = {}
+
+if client > 11200 then
+  -- tbc
+  pfQuest.dburl = "https://tbc-twinhead.twinstar.cz/?quest="
+else
+  -- vanilla
+  pfQuest.dburl = "https://vanilla-twinhead.twinstar.cz/?quest="
+end
 
 function pfQuest:Debug(msg)
   -- only show debug output if enabled
@@ -113,6 +122,8 @@ end)
 
 pfQuest:SetScript("OnUpdate", function()
   if this.lock and this.lock > GetTime() then return end
+  if not pfDatabase.localized then return end
+
   if ( this.tick or .05) > GetTime() then return else this.tick = GetTime() + .05 end
 
   -- check questlog each second
@@ -136,9 +147,8 @@ pfQuest:SetScript("OnUpdate", function()
     then
       local meta = { ["addon"] = "PFQUEST" }
       pfDatabase:SearchQuests(meta)
-      pfMap:UpdateNodes()
-      this.updateQuestGivers = false
     end
+    this.updateQuestGivers = false
   end
 
   if tsize(this.queue) == 0 then return end
@@ -165,8 +175,6 @@ pfQuest:SetScript("OnUpdate", function()
         if entry[2] and pfDB["quests"]["loc"][entry[2]] and pfDB["quests"]["loc"][entry[2]].T then
           pfMap:DeleteNode("PFQUEST", pfDB["quests"]["loc"][entry[2]].T)
         end
-
-        pfMap:UpdateNodes()
       end
 
       pfQuest.abandon = ""
@@ -178,9 +186,7 @@ pfQuest:SetScript("OnUpdate", function()
       end
 
       -- update quest nodes
-      if pfQuest_config["trackingmethod"] ~= 4 and
-        (pfQuest_config["trackingmethod"] ~= 2 or IsQuestWatched(entry[3]))
-      then
+      if pfQuest_config["trackingmethod"] ~= 4 then
         -- delete node by title
         pfMap:DeleteNode("PFQUEST", entry[1])
 
@@ -189,8 +195,10 @@ pfQuest:SetScript("OnUpdate", function()
           pfMap:DeleteNode("PFQUEST", pfDB["quests"]["loc"][entry[2]].T)
         end
 
-        -- skip quest objective detection on manual mode
-        if pfQuest_config["trackingmethod"] ~= 3 then
+        -- skip quest objective detection on manual and tacked mode
+        if pfQuest_config["trackingmethod"] ~= 3 and
+          (pfQuest_config["trackingmethod"] ~= 2 or IsQuestWatched(entry[3]))
+        then
           local meta = { ["addon"] = "PFQUEST", ["qlogid"] = entry[3] }
           pfDatabase:SearchQuestID(entry[2], meta)
         end
@@ -214,8 +222,10 @@ pfQuest:SetScript("OnUpdate", function()
   end
 end)
 
+local questlog_flip, questlog_flop = {}, {}
 function pfQuest:UpdateQuestlog()
-  pfQuest.questlog_tmp = {}
+  -- initialize flip flop if not yet defined
+  pfQuest.questlog_tmp = pfQuest.questlog_tmp or questlog_flip
 
   local _, numQuests = GetNumQuestLogEntries()
   local found = 0
@@ -281,8 +291,20 @@ function pfQuest:UpdateQuestlog()
     end
   end
 
-  -- set new questlog
+  -- set questlog to current flip flop
   pfQuest.questlog = pfQuest.questlog_tmp
+
+  -- switch tmp to the other flip flop
+  if pfQuest.questlog_tmp == questlog_flip then
+    pfQuest.questlog_tmp = questlog_flop
+  else
+    pfQuest.questlog_tmp = questlog_flip
+  end
+
+  -- clear next temporary questlog entries
+  for k, v in pairs(pfQuest.questlog_tmp) do
+    pfQuest.questlog_tmp[k] = nil
+  end
 
   return change
 end
@@ -293,7 +315,6 @@ function pfQuest:ResetAll()
   pfQuest.questlog = {}
   pfQuest.updateQuestLog = true
   pfQuest.updateQuestGivers = true
-  pfMap:UpdateNodes()
 end
 
 -- register popup dialog to copy urls
@@ -340,17 +361,11 @@ function pfQuest:AddQuestLogIntegration()
   pfQuest.buttonOnline:SetHeight(15)
   pfQuest.buttonOnline:SetPoint("TOPRIGHT", dockFrame, "TOPRIGHT", -12, -10)
   pfQuest.buttonOnline:SetScript("OnClick", function()
-
-    local questurl = "https://vanilla-twinhead.twinstar.cz/?quest="
-    if client > 11200 then
-      questurl = "https://tbc-twinhead.twinstar.cz/?quest="
-    end
-
     if pfUI and pfUI.chat then
-      pfUI.chat.urlcopy.text:SetText(questurl .. (this:GetID() or 0))
+      pfUI.chat.urlcopy.text:SetText(pfQuest.dburl .. (this:GetID() or 0))
       pfUI.chat.urlcopy:Show()
     else
-      StaticPopupDialogs["PFQUEST_URLCOPY"].data = questurl .. (this:GetID() or 0)
+      StaticPopupDialogs["PFQUEST_URLCOPY"].data = pfQuest.dburl .. (this:GetID() or 0)
       local dialog = StaticPopup_Show("PFQUEST_URLCOPY")
       _G[dialog:GetName().."Button1"]:ClearAllPoints()
       _G[dialog:GetName().."Button1"]:SetPoint("BOTTOM", dialog, "BOTTOM", 0, 16)
@@ -409,9 +424,11 @@ function pfQuest:AddQuestLogIntegration()
       local QuestLogQuestTitle = EQL3_QuestLogQuestTitle or QuestLogQuestTitle
       local QuestLogObjectivesText = EQL3_QuestLogObjectivesText or QuestLogObjectivesText
       local QuestLogQuestDescription = EQL3_QuestLogQuestDescription or QuestLogQuestDescription
+      local QuestLogDetailScrollFrame = EQL3_QuestLogDetailScrollFrame or QuestLogDetailScrollFrame
       QuestLogQuestTitle:SetText(pfDatabase:FormatQuestText(pfDB["quests"][lang][id]["T"]))
       QuestLogObjectivesText:SetText(pfDatabase:FormatQuestText(pfDB["quests"][lang][id]["O"]))
       QuestLogQuestDescription:SetText(pfDatabase:FormatQuestText(pfDB["quests"][lang][id]["D"]))
+      QuestLogDetailScrollFrame:UpdateScrollChildRect()
     end
   end)
 
@@ -443,7 +460,6 @@ function pfQuest:AddQuestLogIntegration()
     if header then return end
 
     pfMap:DeleteNode("PFQUEST", title)
-    pfMap:UpdateNodes()
   end)
 
   pfQuest.buttonClean = pfQuest.buttonClean or CreateFrame("Button", "pfQuestClean", dockFrame, "UIPanelButtonTemplate")
@@ -453,7 +469,6 @@ function pfQuest:AddQuestLogIntegration()
   pfQuest.buttonClean:SetPoint("TOP", dockTitle, "TOP", 37, 0)
   pfQuest.buttonClean:SetScript("OnClick", function()
     pfMap:DeleteNode("PFQUEST")
-    pfMap:UpdateNodes()
   end)
 
   pfQuest.buttonReset = pfQuest.buttonReset or CreateFrame("Button", "pfQuestReset", dockFrame, "UIPanelButtonTemplate")

@@ -5,9 +5,7 @@ local noloc = { "items", "quests", "objects", "units" }
 -- Patch databases to merge TurtleWoW data
 local function patchtable(base, diff)
   for k, v in pairs(diff) do
-    if base[k] and type(v) == "table" then
-      patchtable(base[k], v)
-    elseif type(v) == "string" and v == "_" then
+    if type(v) == "string" and v == "_" then
       base[k] = nil
     else
       base[k] = v
@@ -35,6 +33,28 @@ if loc_update then patchtable(loc_core, loc_update) end
 
 if pfDB["minimap-turtle"] then patchtable(pfDB["minimap"], pfDB["minimap-turtle"]) end
 if pfDB["meta-turtle"] then patchtable(pfDB["meta"], pfDB["meta-turtle"]) end
+
+-- Update bitmasks to include custom races
+if pfDB.bitraces then
+  pfDB.bitraces[256] = "Goblin"
+  pfDB.bitraces[512] = "BloodElf"
+end
+
+-- Use turtle-wow database url
+pfQuest.dburl = "https://database.turtle-wow.org/?quest="
+
+-- Disable Minimap in custom dungeon maps
+function pfMap:HasMinimap(map_id)
+  -- disable dungeon minimap
+  local has_minimap = not IsInInstance()
+
+  -- enable dungeon minimap if continent is less then 3 (e.g AV)
+  if IsInInstance() and GetCurrentMapContinent() < 3 then
+    has_minimap = true
+  end
+
+  return has_minimap
+end
 
 -- Reload all pfQuest internal database shortcuts
 pfDatabase:Reload()

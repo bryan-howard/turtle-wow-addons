@@ -32,7 +32,7 @@ local function ShowTooltip()
         if objectives and objectives > 0 then
           for i=1, objectives, 1 do
             local text, _, done = GetQuestLogLeaderBoard(i, qlogid)
-            local _, _, obj, cur, req = strfind(text, "(.*):%s*([%d]+)%s*/%s*([%d]+)")
+            local _, _, obj, cur, req = strfind(gsub(text, "\239\188\154", ":"), "(.*):%s*([%d]+)%s*/%s*([%d]+)")
             if done then
               GameTooltip:AddLine(" - " .. text, 0,1,0)
             elseif cur and req then
@@ -52,7 +52,7 @@ local function ShowTooltip()
   end
 end
 
-local unfolded = {}
+local expand_states = {}
 
 tracker = CreateFrame("Frame", "pfQuestMapTracker", UIParent)
 tracker:Hide()
@@ -274,11 +274,11 @@ function tracker.ButtonClick()
     -- switch color
     pfQuest_colors[this.title] = { pfMap.str2rgb(this.title .. GetTime()) }
     pfMap:UpdateNodes()
-  elseif not unfolded[this.title] then
-    unfolded[this.title] = true
+  elseif expand_states[this.title] == 0 then
+    expand_states[this.title] = 1
     tracker.ButtonEvent(this)
-  elseif unfolded[this.title] then
-    unfolded[this.title] = nil
+  elseif expand_states[this.title] == 1 then
+    expand_states[this.title] = 0
     tracker.ButtonEvent(this)
   end
 end
@@ -346,10 +346,17 @@ function tracker.ButtonEvent(self)
     local cur,max = 0,0
     local percent = 0
 
+    -- write expand state
+    if not expand_states[title] then
+      expand_states[title] = pfQuest_config["trackerexpand"] == "1" and 1 or 0
+    end
+
+    local expanded = expand_states[title] == 1 and true or nil
+
     if objectives and objectives > 0 then
       for i=1, objectives, 1 do
         local text, _, done = GetQuestLogLeaderBoard(i, qlogid)
-        local _, _, obj, objNum, objNeeded = strfind(text, "(.*):%s*([%d]+)%s*/%s*([%d]+)")
+        local _, _, obj, objNum, objNeeded = strfind(gsub(text, "\239\188\154", ":"), "(.*):%s*([%d]+)%s*/%s*([%d]+)")
         if objNum and objNeeded then
           max = max + objNeeded
           cur = cur + objNum
@@ -367,12 +374,12 @@ function tracker.ButtonEvent(self)
     end
 
     -- expand button to show objectives
-    if objectives and (unfolded[title] or ( percent > 0 and percent < 100 )) then
+    if objectives and (expanded or ( percent > 0 and percent < 100 )) then
       self:SetHeight(entryheight + objectives * fontsize)
 
       for i=1, objectives, 1 do
         local text, _, done = GetQuestLogLeaderBoard(i, qlogid)
-        local _, _, obj, objNum, objNeeded = strfind(text, "(.*):%s*([%d]+)%s*/%s*([%d]+)")
+        local _, _, obj, objNum, objNeeded = strfind(gsub(text, "\239\188\154", ":"), "(.*):%s*([%d]+)%s*/%s*([%d]+)")
 
         if not self.objectives[i] then
           self.objectives[i] = self:CreateFontString(nil, "HIGH", "GameFontNormal")
@@ -493,11 +500,18 @@ function tracker.ButtonAdd(title, node)
   -- skip duplicate titles
   for bid, button in pairs(tracker.buttons) do
     if button.title and button.title == title then
-      -- prefer node icons over questgivers
-      if node.dummy or ( not node.texture and button.node.texture ) then
+      if node.dummy or not node.texture then
+        -- We found a node icon (1st prio)
+        -- use the ID and update the button
         id = bid
         break
+      elseif node.cluster and ( not button.node or button.node.texture ) then
+        -- We found a cluster icon (2nd prio)
+        -- set the id, but still try to find a node icon
+        id = bid
       else
+        -- got none of the above, therefore
+        -- no icon update required, skip here
         return
       end
     end
